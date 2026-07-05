@@ -48,7 +48,7 @@ class TextEncoder(nn.Module):
 		outs = []
 		x = self.emd(x)
 		hiddens = self.init_hidden(1024)
-		emb = pack_padded_sequence(x, lengths, batch_first=True)
+		emb = pack_padded_sequence(x, lengths.cpu(), batch_first=True)
 		self.gru.flatten_parameters()
 		outputs, hidden_t = self.gru(emb, hiddens)
 		output_unpack = pad_packed_sequence(outputs, batch_first=True)

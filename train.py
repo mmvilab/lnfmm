@@ -98,7 +98,7 @@ def get_properseq(x, img_gan, img_vgg):
 	seq = seq.astype(np.float64)
 	seq_lengths = seq_lengths[sort_order].astype(np.int32)
 	seq = torch.LongTensor(seq.astype(np.float64)).to(device)
-	seq_lengths = torch.LongTensor(seq_lengths.astype(np.int32)).to(device) 
+	seq_lengths = torch.LongTensor(seq_lengths.astype(np.int32))  # drop .to(device), keep on CPU 
 	return seq, seq_lengths, sort_order, sorted_imgs_gan, sorted_imgs_vgg
 
 
@@ -250,7 +250,7 @@ if __name__ == "__main__":
 	optimizerD = optim.Adam(disc.parameters(),lr=0.0003, betas=(0.0, beta_2_d))
 	''''''
 
-	NLL = nn.NLLLoss(size_average=False, ignore_index=0)
+	NLL = nn.NLLLoss(reduction='sum', ignore_index=0)
 	GAN_loss = nn.BCELoss()
 
 
