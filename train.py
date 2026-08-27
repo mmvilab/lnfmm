@@ -4,6 +4,9 @@ import random
 import numpy as np
 import nltk
 import argparse
+import wandb
+import psutil
+import os as os_mem
 import itertools
 import pickle
 import json
@@ -157,12 +160,14 @@ if __name__ == "__main__":
 
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--config', default='params_i2t', help='Experiment settings.')
+	parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from.')
 	args = parser.parse_args()
 	config_setting = args.config
 
 	''' Get parameters from params.json'''
 	config = json.loads(open('params.json', 'r').read())
 	config = config[config_setting]
+	wandb.init(project='lnfmm-baseline', name=config_setting, mode='offline', config=config)
 	data_path = config['pathToData']
 	vocab_path = config['vocab_path']
 	noise_im = int(config['noise_im'])
@@ -203,7 +208,7 @@ if __name__ == "__main__":
 	'''set data loaders'''
 	
 	dataset = load_dataset(data_path,config_setting)
-	dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=int(4), drop_last=True)
+	dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=int(4), drop_last=True, persistent_workers=True)
 	dataloader_iterator = iter(dataloader)
 
 
@@ -263,8 +268,32 @@ if __name__ == "__main__":
 	discriminator_iter = 2
 
 
-	for epoch in range(epochs):
+	start_epoch = 0
+	if args.resume is not None:
+		print(f"Resuming from checkpoint: {args.resume}")
+		checkpoint = torch.load(args.resume, map_location='cuda')
+		image_encoder.module.load_state_dict(checkpoint['image_encoder_sd'])
+		image_decoder.module.load_state_dict(checkpoint['image_decoder_sd'])
+		flow_latent_align.module.load_state_dict(checkpoint['flow_latent_align_sd'])
+		flow_latent_image.load_state_dict(checkpoint['flow_latent_image_sd'])
+		flow_text_cond.load_state_dict(checkpoint['flow_text_cond_sd'])
+		txtEncoder.module.load_state_dict(checkpoint['txtEncoder_sd'])
+		txtDecoder.load_state_dict(checkpoint['txtDecoder_sd'])
+		disc.module.load_state_dict(checkpoint['disc_sd'])
+		optimizerI_e.load_state_dict(checkpoint['optimizer_image_encoder_sd'])
+		optimizerI_d.load_state_dict(checkpoint['optimizer_image_decoder_sd'])
+		optimizerG_align.load_state_dict(checkpoint['optimizer_flow_latent_align_sd'])
+		optimizerG_image.load_state_dict(checkpoint['optimizer_flow_latent_image_sd'])
+		optimizerG_cond_text.load_state_dict(checkpoint['optimizer_flow_text_cond_sd'])
+		optimizerF.load_state_dict(checkpoint['optimizer_txt_sd'])
+		optimizerD.load_state_dict(checkpoint['optimizerD_sd'])
+		start_epoch = checkpoint.get('epoch', 0)
+		print(f"Resuming at epoch {start_epoch}")
+
+	for epoch in range(start_epoch, epochs):
 		adjust_learning_rate(optimizerI_e, epoch, 0.00001)
+		_mem_proc = psutil.Process(os_mem.getpid())
+		print(f"Epoch {epoch} RSS memory: {_mem_proc.memory_info().rss / 1e9:.2f} GB")
 		train_bar = tqdm(range(len(dataset)//batch_size))
 		for i in train_bar: 
 
@@ -288,7 +317,9 @@ if __name__ == "__main__":
 			try:
 				data = next(dataloader_iterator)
 			except StopIteration:
-				dataloader_iterator = iter(dataloader)  
+				del dataloader_iterator
+				import gc; gc.collect()
+				dataloader_iterator = iter(dataloader)
 				data = next(dataloader_iterator)
 
 			img_gan, img_vgg, captions = data # cap has shape batch_size*10
@@ -308,6 +339,7 @@ if __name__ == "__main__":
 
 			z_im_full, image_rec_loss, z_im_true,nll_im = autoencode_image( image_encoder, image_decoder, flow_latent_image, img_gan.cuda(), img_vgg.cuda(), z_im_text2img )
 			z_im_full = z_im_full[:,:].cuda()
+			print("z_im_full NaN:", torch.isnan(z_im_full).any().item())
 			z_im = z_im_full[:,:img_dim]
 			z_rev, _ = flow_latent_align(x=z_im.to(device), z_im=None, z=None, cond=None, eps_std=None, reverse=True)
 			z_text, nll_text_cond, _  = flow_text_cond(x=txtencoded_hidden[:,img_dim:].to(device), z_im=None, z=None, cond=z_rev[:,:img_dim].to(device), eps_std=None, reverse=False)
@@ -335,7 +367,9 @@ if __name__ == "__main__":
 				try:
 					data = next(dataloader_iterator)
 				except StopIteration:
-					dataloader_iterator = iter(dataloader)  
+					del dataloader_iterator
+					import gc; gc.collect()
+					dataloader_iterator = iter(dataloader)
 					data = next(dataloader_iterator)
 
 				img_gan, _, _ = data
@@ -355,7 +389,12 @@ if __name__ == "__main__":
 				loss_im_rec  = lambda_5*(torch.mean(image_rec_loss)+lambda_5_G*torch.mean(err_G))
 
 				loss = (loss_shared_dim+loss_text_lflow+loss_im_lflow+loss_txt_rec+loss_im_rec).to(device)
+				print("loss NaN:", torch.isnan(loss).item())
+				with open('debug_loss_log.txt', 'a') as f:
+					f.write(f"{epoch},{i},{loss.item()}\n")
+				wandb.log({'loss': loss.item(), 'epoch': epoch, 'iteration': i})
 				loss.backward()
+
 
 
 				torch.nn.utils.clip_grad_value_(txtEncoder.parameters(), 1.0)
@@ -373,10 +412,13 @@ if __name__ == "__main__":
 				optimizerG_cond_text.step()
 
 				train_bar.set_description('Loss %.2f | Epoch %d -- Iteration ' % (loss.item(),epoch))
+				if i % 100 == 0:
+					_mem_proc2 = psutil.Process(os_mem.getpid())
+					print(f"Epoch {epoch} Iter {i} RSS memory: {_mem_proc2.memory_info().rss / 1e9:.2f} GB")
 
 			if i%chkpt_interval==0:
 
-				torch.save({
+				_ckpt_dict = {
 							'image_encoder_sd': image_encoder.module.state_dict(),
 							'image_decoder_sd': image_decoder.module.state_dict(),
 							'flow_latent_align_sd': flow_latent_align.module.state_dict(),
@@ -391,8 +433,17 @@ if __name__ == "__main__":
 							'optimizer_flow_latent_image_sd': optimizerG_image.state_dict(),
 							'optimizer_flow_text_cond_sd': optimizerG_cond_text.state_dict(),
 							'optimizer_txt_sd': optimizerF.state_dict(),
-							'optimizerD_sd' : optimizerD.state_dict()
-							}, './model_checkpoint_t2i.pt')
+							'optimizerD_sd' : optimizerD.state_dict(),
+							'epoch': epoch,
+							'i': i
+							}
+				torch.save(_ckpt_dict, './model_checkpoint_t2i.pt.tmp')
+				import os
+				os.replace('./model_checkpoint_t2i.pt.tmp', './model_checkpoint_t2i.pt')
+				del _ckpt_dict
+				import gc
+				gc.collect()
+				torch.cuda.empty_cache()
 
 
 
