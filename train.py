@@ -85,7 +85,6 @@ def load_dataset(data_path,config_setting):
 	return dataset
 
 
-
 def get_properseq(x, img_gan, img_vgg):
 	sorted_imgs_gan = torch.zeros(img_gan.size())
 	sorted_imgs_vgg = torch.zeros(img_vgg.size())
@@ -103,7 +102,6 @@ def get_properseq(x, img_gan, img_vgg):
 	seq = torch.LongTensor(seq.astype(np.float64)).to(device)
 	seq_lengths = torch.LongTensor(seq_lengths.astype(np.int32))  # drop .to(device), keep on CPU 
 	return seq, seq_lengths, sort_order, sorted_imgs_gan, sorted_imgs_vgg
-
 
 
 def get_sentence_targets(cap):
@@ -129,14 +127,12 @@ def get_sentence_NLL_loss(seq,logp):
 	logp = logp.view(-1, logp.size(2))
 	return NLL(logp, target), preds
 
+
 def adjust_learning_rate(optimizer, epoch,lr):
 	"""Sets the learning rate to the initial LR decayed by 0.5 every 30 epochs"""
 	lr = lr * (0.5 ** (epoch // 25))
 	for param_group in optimizer.param_groups:
 		param_group['lr'] = lr
-
-
-
 
 
 def autoencode_image( encoder, decoder, flow_latent_image, im_batch_gan, im_batch_vgg, z_im_text2img ):

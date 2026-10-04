@@ -4,3 +4,4 @@ __pycache__/
 train2014/
 annotations/
 val2014/
+wandb
