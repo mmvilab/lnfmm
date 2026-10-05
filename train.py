@@ -187,6 +187,8 @@ if __name__ == "__main__":
 	lr_i_e = config['lr_i_e']
 	beta_1_i_e = config['beta_1_i_e']
 	beta_2_d = config['beta_2_d']
+	test_run = config.get('test_run', False)
+	test_fraction = config.get('test_fraction', 0.02)
 	device = torch.device("cuda:0")
 
 	'''load vocabulary from vocab.pkl'''
@@ -204,6 +206,14 @@ if __name__ == "__main__":
 	'''set data loaders'''
 	
 	dataset = load_dataset(data_path,config_setting)
+ 
+	if test_run:
+		n_keep = max(batch_size * 2, int(len(dataset) * test_fraction))
+		g = torch.Generator().manual_seed(0)
+		keep_idx = torch.randperm(len(dataset), generator=g)[:n_keep].tolist()
+		dataset = torch.utils.data.Subset(dataset, keep_idx)
+		print(f"TEST RUN: using {len(dataset)} samples ({test_fraction*100:.1f}%)") 
+  
 	dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=int(4), drop_last=True, persistent_workers=True)
 	dataloader_iterator = iter(dataloader)
 
@@ -228,7 +238,7 @@ if __name__ == "__main__":
 
 	txtEncoder = TextEncoder(batch_size//num_gpus,word_dim,embed_size,vocab_size)
 	txtEncoder = nn.DataParallel(txtEncoder).cuda()
-	txtDecoder = TextDecoder(batch_size,embed_size,vocab_size)
+	txtDecoder = TextDecoder(batch_size, embed_size, vocab_size)
 	txtDecoder = (txtDecoder).cuda()
 
 	flow_text_cond = FlowLatent(batch_size=batch_size,input_dim=noise_txt,hidden_channels=1024,K=16,gaussian_dims=noise_txt,gaussian_var=0.25,cond_dim=img_dim,coupling='full')
@@ -333,9 +343,11 @@ if __name__ == "__main__":
 			z, nll, _ = flow_latent_align(x=txtencoded_hidden[:,:img_dim].to(device), z_im=None, z=None, cond=None, eps_std=None, reverse=False) 
 			z_im_text2img = z[:,:img_dim]
 
-			z_im_full, image_rec_loss, z_im_true,nll_im = autoencode_image( image_encoder, image_decoder, flow_latent_image, img_gan.cuda(), img_vgg.cuda(), z_im_text2img )
+			z_im_full, image_rec_loss, z_im_true, nll_im = autoencode_image( image_encoder, image_decoder, flow_latent_image, img_gan.cuda(), img_vgg.cuda(), z_im_text2img )
 			z_im_full = z_im_full[:,:].cuda()
-			print("z_im_full NaN:", torch.isnan(z_im_full).any().item())
+   
+			# print("z_im_full NaN:", torch.isnan(z_im_full).any().item())
+   
 			z_im = z_im_full[:,:img_dim]
 			z_rev, _ = flow_latent_align(x=z_im.to(device), z_im=None, z=None, cond=None, eps_std=None, reverse=True)
 			z_text, nll_text_cond, _  = flow_text_cond(x=txtencoded_hidden[:,img_dim:].to(device), z_im=None, z=None, cond=z_rev[:,:img_dim].to(device), eps_std=None, reverse=False)
@@ -385,7 +397,9 @@ if __name__ == "__main__":
 				loss_im_rec  = lambda_5*(torch.mean(image_rec_loss)+lambda_5_G*torch.mean(err_G))
 
 				loss = (loss_shared_dim+loss_text_lflow+loss_im_lflow+loss_txt_rec+loss_im_rec).to(device)
-				print("loss NaN:", torch.isnan(loss).item())
+    
+				# print("loss NaN:", torch.isnan(loss).item())
+    
 				with open('debug_loss_log.txt', 'a') as f:
 					f.write(f"{epoch},{i},{loss.item()}\n")
 				wandb.log({'loss': loss.item(), 'epoch': epoch, 'iteration': i})

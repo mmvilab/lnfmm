@@ -5,3 +5,9 @@ train2014/
 annotations/
 val2014/
 wandb
+
+# Download COCO dataset
+# wget -c http://images.cocodataset.org/zips/train2014.zip
+# wget -c http://images.cocodataset.org/zips/val2014.zip
+# wget -c http://images.cocodataset.org/zips/test2014.zip
+# wget -c http://images.cocodataset.org/annotations/annotations_trainval2014.zip
